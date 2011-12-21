@@ -156,7 +156,6 @@ class Options:
         env=...      -- if not None, name of environment variable that
                         overrides the configuration file or default
         """
-
         if flag is not None:
             if handler is not None:
                 raise ValueError, "use at most one of flag= and handler="
@@ -285,7 +284,7 @@ class Options:
         self.process_config_file()
 
     def process_config_file(self, do_usage=True):
-        # Process config file
+        """Process config file."""
         if not hasattr(self.configfile, 'read'):
             self.here = os.path.abspath(os.path.dirname(self.configfile))
             set_here(self.here)
@@ -357,7 +356,6 @@ class ServerOptions(Options):
     pidfile = None
     passwdfile = None
     nodaemon = None
-    signal = None
     environment = None
     httpservers = ()
     unlink_socketfiles = True
@@ -404,6 +402,7 @@ class ServerOptions(Options):
         self.pidhistory = {}
         self.process_group_configs = []
         self.parse_warnings = []
+        self.signal_receiver = SignalReceiver()
 
     def version(self, dummy):
         """Print version to stdout and exit(0).
@@ -542,8 +541,10 @@ class ServerOptions(Options):
         section.nocleanup = boolean(get('nocleanup', 'false'))
         section.strip_ansi = boolean(get('strip_ansi', 'false'))
 
+        expansions = {'here':self.here}
+        expansions.update(environ_expansions())
         environ_str = get('environment', '')
-        environ_str = expand(environ_str, {'here':self.here}, 'environment')
+        environ_str = expand(environ_str, expansions, 'environment')
         section.environment = dict_of_key_value_pairs(environ_str)
         # Process rpcinterface plugins before groups to allow custom events to
         # be registered.
@@ -675,6 +676,7 @@ class ServerOptions(Options):
 
             expansions = {'here':self.here,
                           'program_name':program_name}
+            expansions.update(environ_expansions())
             socket = expand(socket, expansions, 'socket')
             try:
                 socket_config = self.parse_fcgi_socket(socket, proc_uid,
@@ -783,6 +785,7 @@ class ServerOptions(Options):
                           'program_name':program_name,
                           'host_node_name':host_node_name,
                           'group_name':group_name}
+            expansions.update(environ_expansions())
 
             environment = dict_of_key_value_pairs(
                 expand(environment_str, expansions, 'environment'))
@@ -1029,15 +1032,16 @@ class ServerOptions(Options):
         self.logger.close()
 
     def setsignals(self):
-        signal.signal(signal.SIGTERM, self.sigreceiver)
-        signal.signal(signal.SIGINT, self.sigreceiver)
-        signal.signal(signal.SIGQUIT, self.sigreceiver)
-        signal.signal(signal.SIGHUP, self.sigreceiver)
-        signal.signal(signal.SIGCHLD, self.sigreceiver)
-        signal.signal(signal.SIGUSR2, self.sigreceiver)
+        receive = self.signal_receiver.receive
+        signal.signal(signal.SIGTERM, receive)
+        signal.signal(signal.SIGINT, receive)
+        signal.signal(signal.SIGQUIT, receive)
+        signal.signal(signal.SIGHUP, receive)
+        signal.signal(signal.SIGCHLD, receive)
+        signal.signal(signal.SIGUSR2, receive)
 
-    def sigreceiver(self, sig, frame):
-        self.signal = sig
+    def get_signal(self):
+        return self.signal_receiver.get_signal()
 
     def openhttpservers(self, supervisord):
         try:
@@ -1846,6 +1850,21 @@ def _init_signames():
             d[v] = k
     _signames = d
 
+class SignalReceiver:
+    def __init__(self):
+        self._signals_recvd = []
+
+    def receive(self, sig, frame):
+        if sig not in self._signals_recvd:
+            self._signals_recvd.append(sig)
+
+    def get_signal(self):
+        if self._signals_recvd:
+            sig = self._signals_recvd.pop(0)
+        else:
+            sig = None
+        return sig
+
 # miscellaneous utility functions
 
 def expand(s, expansions, name):
@@ -1859,6 +1878,25 @@ def expand(s, expansions, name):
         raise ValueError(
             'Format string %r for %r is badly formatted' % (s, name)
             )
+
+_environ_expansions = None
+
+def environ_expansions():
+    """Return dict of environment variables, suitable for use in string
+    expansions.
+
+    Every environment variable is prefixed by 'ENV_'.
+    """
+    global _environ_expansions
+
+    if _environ_expansions:
+        return _environ_expansions
+
+    _environ_expansions = {}
+    for key, value in os.environ.iteritems():
+        _environ_expansions['ENV_%s' % key] = value
+
+    return _environ_expansions
 
 def make_namespec(group_name, process_name):
     # we want to refer to the process by its "short name" (a process named

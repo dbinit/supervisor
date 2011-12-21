@@ -60,6 +60,8 @@
    - Organize processes by group and allow groups to be started/stopped.
    
    - Allow a supervisorctl-like command line through the web interface.
+   
+   - Consider configuration reloading options (see issue #37 for more).
 
    - Display more information about Supervisor (identification, pid, etc.)
 
@@ -70,3 +72,5 @@
 - Unit tests for log rotation.
 
 - Command-line arg tests.
+
+- Consider adding a dependency mechanism.  See pull request #20.
